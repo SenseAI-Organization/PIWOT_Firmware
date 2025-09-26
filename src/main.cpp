@@ -7,16 +7,21 @@
 #define TAG "ESP_NOW_CLIENT"
 
 constexpr gpio_num_t LED_PIN = GPIO_NUM_13;  // Replace with your actual pin
-constexpr gpio_num_t ACTUATOR_PIN = GPIO_NUM_21;
+constexpr gpio_num_t ACTUATOR_PIN = GPIO_NUM_27;
 
 const char* devName = "DroneFB";
 //48:ca:43:15:ff:2c
-uint8_t serverMac[6] = {0x48, 0xCA, 0x43, 0x15, 0xFF, 0x2C};
+uint8_t serverMac[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 void led_ONOFF(){
     gpio_set_level(LED_PIN,1);
-    vTaskDelay(pdMS_TO_TICKS(100));
+    vTaskDelay(pdMS_TO_TICKS(500));
     gpio_set_level(LED_PIN,0);
+}
+void actuator_ONOFF(){
+    gpio_set_level(ACTUATOR_PIN,1);
+    vTaskDelay(pdMS_TO_TICKS(500));
+    gpio_set_level(ACTUATOR_PIN,0);
 }
 void led_ON(){
     gpio_set_level(LED_PIN,1);
@@ -24,7 +29,7 @@ void led_ON(){
 void led_blink(int nTimes){
     for(int i=0;i<nTimes;i++){
         gpio_set_level(LED_PIN,1);
-        vTaskDelay(pdMS_TO_TICKS(50));
+        vTaskDelay(pdMS_TO_TICKS(30));
         gpio_set_level(LED_PIN,0);
         vTaskDelay(pdMS_TO_TICKS(30));
     }
@@ -63,22 +68,31 @@ extern "C" void app_main() {
     espClient.sendData(std::string(Message));
     std::string receivedData= "IDLE";
     int state=1;
+    uint32_t currentMillis=0;
+    uint32_t startMillis=0;
     while (true) {
+        currentMillis= esp_timer_get_time() / 1000;
+
         if (espClient.hasNewMessage()) {
-            //std::string receivedData;
+            receivedData.clear();
             espClient.receiveData(receivedData);
             ESP_LOGI(TAG, "Received data: %s", receivedData.c_str());
         }
-        if(receivedData == "IDLE"){
+
+        if (receivedData.find("IDLE") != std::string::npos) {
             printf("IDLE\n");
-            state=1;
-        }else if(receivedData == "START"){
+            state = 1;
+        } else if (receivedData.find("START") != std::string::npos) {
             printf("START\n");
-            state=2;
-        }else if(receivedData == "RELEASE"){
+            startMillis = currentMillis;
+            state = 2;
+        } else if (receivedData.find("RELEASE") != std::string::npos) {
             printf("RELEASE\n");
-            state=3;
+            state = 3;
         }
+
+
+        if(state==2 && (currentMillis-startMillis > 60000*3)) state=3;
 
         switch (state) {
             case 1:
@@ -86,14 +100,19 @@ extern "C" void app_main() {
                 break;
             case 2:
                 led_ON();
+                receivedData.clear();
                 break;
             case 3:
-                led_blink(10);
+                led_blink(20);
+                actuator_ONOFF();
+                state=1;
+                receivedData= " ";
                 break;
             default:
                 break;
         }
-        vTaskDelay(pdMS_TO_TICKS(100));
+        vTaskDelay(pdMS_TO_TICKS(500));
+        //if(currentMillis > 60000) receivedData= "START";
     }
 }
 
