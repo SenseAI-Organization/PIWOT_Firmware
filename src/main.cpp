@@ -2,15 +2,45 @@
 #include "esp_timer.h"
 #include "esp_mac.h"
 #include "esp_system.h"
-
-
+#include <driver/gpio.h>
 
 #define TAG "ESP_NOW_CLIENT"
+
+constexpr gpio_num_t LED_PIN = GPIO_NUM_13;  // Replace with your actual pin
+constexpr gpio_num_t ACTUATOR_PIN = GPIO_NUM_21;
+
 const char* devName = "DroneFB";
 //48:ca:43:15:ff:2c
 uint8_t serverMac[6] = {0x48, 0xCA, 0x43, 0x15, 0xFF, 0x2C};
 
+void led_ONOFF(){
+    gpio_set_level(LED_PIN,1);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    gpio_set_level(LED_PIN,0);
+}
+void led_ON(){
+    gpio_set_level(LED_PIN,1);
+}
+void led_blink(int nTimes){
+    for(int i=0;i<nTimes;i++){
+        gpio_set_level(LED_PIN,1);
+        vTaskDelay(pdMS_TO_TICKS(50));
+        gpio_set_level(LED_PIN,0);
+        vTaskDelay(pdMS_TO_TICKS(30));
+    }
+}
+
 extern "C" void app_main() { 
+    // Configure both pins as outputs
+    gpio_config_t io_conf = {};
+    io_conf.intr_type = GPIO_INTR_DISABLE;
+    io_conf.mode = GPIO_MODE_OUTPUT;
+    io_conf.pin_bit_mask = (1ULL << LED_PIN) | (1ULL << ACTUATOR_PIN);
+    io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    gpio_config(&io_conf);
+    gpio_set_level(LED_PIN,0);
+    gpio_set_level(ACTUATOR_PIN,0);
     EspNow espClient(6, 1);
     bool sendEspNowData(EspNow &clientSender, std::string dataToSend);
 
@@ -32,7 +62,7 @@ extern "C" void app_main() {
 
     espClient.sendData(std::string(Message));
     std::string receivedData= "IDLE";
-    int ledState=1;
+    int state=1;
     while (true) {
         if (espClient.hasNewMessage()) {
             //std::string receivedData;
@@ -40,18 +70,25 @@ extern "C" void app_main() {
             ESP_LOGI(TAG, "Received data: %s", receivedData.c_str());
         }
         if(receivedData == "IDLE"){
-            ledState=1;
+            printf("IDLE\n");
+            state=1;
+        }else if(receivedData == "START"){
+            printf("START\n");
+            state=2;
+        }else if(receivedData == "RELEASE"){
+            printf("RELEASE\n");
+            state=3;
         }
 
-        switch (ledState) {
-            case 't':
-
+        switch (state) {
+            case 1:
+                led_ONOFF();
                 break;
-            case 'r':
-
+            case 2:
+                led_ON();
                 break;
-            case 'c':
-
+            case 3:
+                led_blink(10);
                 break;
             default:
                 break;
@@ -67,10 +104,10 @@ bool sendEspNowData(EspNow &clientSender, std::string dataToSend){
     esp_err_t ret = clientSender.sendData(dataToSend);
     clientSender.disconnect();
     if (ret){
-        printf("success sending!");
+        printf("success sending!\n");
         return true;
     } else {
-        printf("error sending!");
+        printf("error sending!\n");
         return false;
     }
     
