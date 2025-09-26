@@ -1,171 +1,77 @@
-#include <stdio.h>
-#include <string>
-#include <sstream>
-#include <chrono>
-#include <thread>
-#include "esp_adc/adc_oneshot.h"
-#include "sd_storage_sense.hpp"
-#include "spi_gp_sense.hpp"
-#include <sys/time.h>
-
-// Adjust these according to your ESP32 chip
-#define ADC_CHANNEL_1 ADC_CHANNEL_4  // GPIO15
-#define ADC_CHANNEL_2 ADC_CHANNEL_5  // GPIO16
-#define ADC_UNIT ADC_UNIT_2
-
-constexpr gpio_num_t kCsPin = GPIO_NUM_10;
-constexpr gpio_num_t kSclPin = GPIO_NUM_12;
-constexpr gpio_num_t kMosiPin = GPIO_NUM_11;
-constexpr gpio_num_t kMisoPin = GPIO_NUM_13;
-
-bool logCSVLine(SD &sd, const std::string &folderName, const std::string &fileName, const std::string &line);
+#include "espnow_sense.hpp"
+#include "esp_timer.h"
+#include "esp_mac.h"
+#include "esp_system.h"
 
 
-void setManualTime() //SET TIME
-{
-    struct tm t = {};
-    t.tm_year = 2025 - 1900; // Year
-    t.tm_mon  = 8;           // September (0 = Jan)
-    t.tm_mday = 26;          // Day
-    t.tm_hour = 10;
-    t.tm_min  = 1;
-    t.tm_sec  = 0;
 
-    time_t now = mktime(&t);
-    struct timeval tv = { .tv_sec = now };
-    settimeofday(&tv, NULL);
-}
+#define TAG "ESP_NOW_CLIENT"
+const char* devName = "DroneFB";
+//48:ca:43:15:ff:2c
+uint8_t serverMac[6] = {0x48, 0xCA, 0x43, 0x15, 0xFF, 0x2C};
 
 extern "C" void app_main() { 
-    setManualTime();
-    //vTaskDelay(pdMS_TO_TICKS(10000));
-    // 1. Initialize SPI bus and SD driver
-    SPI spiMaster(SPI::SpiMode::kMaster, SPI2_HOST, kMosiPin, kMisoPin,
-                  kSclPin);
-    // To initialize spi bus
-    esp_err_t err = spiMaster.init();
-    if (err) {
-        printf("SPI error while init: %s\n", esp_err_to_name(err));
-    }
+    EspNow espClient(6, 1);
+    bool sendEspNowData(EspNow &clientSender, std::string dataToSend);
 
-    SD sd(spiMaster, kCsPin);
-    err = sd.init();
 
-    if (err) {
-        printf("SD error while init: %s\n", esp_err_to_name(err));
-    } else {
-        printf("SD was initialized!\n");
-    }
+    int64_t start_time = esp_timer_get_time();
 
-    // 2. Mount SD card
-    FRESULT error = sd.mountCard();
-    if (err) {
-        printf("SD error while mounting: %s\n", sd.getFastFsErrName(error));
-    } else {
-        std::string currentPath = sd.getCurrentDir();
-        printf(
-            ("Card mounted, here is the root path - " + currentPath).c_str());
-        printf("\n");
-    }
+    // Initialize and set server
+    ESP_LOGI(TAG, "Initializing ESP-NOW client");
+    espClient.initialize();
+    ESP_LOGI(TAG, "+++++++++ Init: %lld ms", (esp_timer_get_time() - start_time) / 1000);
 
-    // --- ADC Setup ---
-    adc_oneshot_unit_handle_t adc_handle;
+    // Set the server/receiver MAC address
+    espClient.setServer(serverMac);
+    ESP_LOGI(TAG, "+++++++++ Server MAC set: %lld ms", (esp_timer_get_time() - start_time) / 1000);
 
-    adc_oneshot_unit_init_cfg_t init_config = {};
-    init_config.unit_id = ADC_UNIT;
-    init_config.clk_src = ADC_RTC_CLK_SRC_DEFAULT;  // default clock source
-    init_config.ulp_mode = ADC_ULP_MODE_DISABLE;    // disable ULP
+    // Send a simple string message
+    char Message[32];
+    snprintf(Message, sizeof(Message),"Hello from %s",devName);
 
-    ESP_ERROR_CHECK(adc_oneshot_new_unit(&init_config, &adc_handle));
-
-    adc_oneshot_chan_cfg_t chan_config = {};
-    chan_config.bitwidth = ADC_BITWIDTH_DEFAULT;
-    chan_config.atten = ADC_ATTEN_DB_12;  // recommended instead of deprecated DB_11
-
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle, ADC_CHANNEL_1, &chan_config));
-    ESP_ERROR_CHECK(adc_oneshot_config_channel(adc_handle, ADC_CHANNEL_2, &chan_config));
-
-    const std::string folder = "logs";
-    const std::string file   = "motorData2.csv";
-
-    
-    int sampleCounter = 0;
-    
+    espClient.sendData(std::string(Message));
+    std::string receivedData= "IDLE";
+    int ledState=1;
     while (true) {
-        int raw1 = 0, raw2 = 0;
-
-        ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, ADC_CHANNEL_1, &raw1));
-        ESP_ERROR_CHECK(adc_oneshot_read(adc_handle, ADC_CHANNEL_2, &raw2));
-
-        // Timestamp
-        time_t now;
-        time(&now);
-        char time_str[32];
-        strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", localtime(&now));
-
-        // CSV line: sample,timestamp,value1,value2
-        std::stringstream line;
-        line << sampleCounter++ << "," << time_str << "," << raw1 << "," << raw2;
-
-        sd.mountCard();
-        if (logCSVLine(sd, folder, file, line.str())) {
-            printf("Logged: %s\n", line.str().c_str());
-        } else {
-            printf("Failed to log line\n");
+        if (espClient.hasNewMessage()) {
+            //std::string receivedData;
+            espClient.receiveData(receivedData);
+            ESP_LOGI(TAG, "Received data: %s", receivedData.c_str());
         }
-        sd.unmountCard();
+        if(receivedData == "IDLE"){
+            ledState=1;
+        }
 
-        std::this_thread::sleep_for(std::chrono::seconds(40));
+        switch (ledState) {
+            case 't':
+
+                break;
+            case 'r':
+
+                break;
+            case 'c':
+
+                break;
+            default:
+                break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
 
-
-bool logCSVLine(SD &sd, const std::string &folderName, const std::string &fileName, const std::string &line) {
-    std::string finalLine = line;
-    if (finalLine.empty() || finalLine.back() != '\n') {
-        finalLine += "\n";
-    }
-
-    // Go to root first
-    if (sd.goToDir("0:/") != FR_OK) {
-        printf("CSV error: could not go to root dir\n");
+bool sendEspNowData(EspNow &clientSender, std::string dataToSend){
+    //const char* TAG_ = "send Function";
+    clientSender.initialize();
+    clientSender.setServer(serverMac);
+    esp_err_t ret = clientSender.sendData(dataToSend);
+    clientSender.disconnect();
+    if (ret){
+        printf("success sending!");
+        return true;
+    } else {
+        printf("error sending!");
         return false;
     }
-
-    // Ensure folder exists
-    if (sd.goToDir(folderName) != FR_OK) {
-        if (sd.createDir(folderName) != FR_OK) {
-            printf("CSV error: could not create folder '%s'\n", folderName.c_str());
-            return false;
-        }
-        sd.goToDir(folderName);
-    }
-
-    // Create file if missing
-    if (sd.openFile(fileName, SD::OpenMode::kOpenReadOnly) != FR_OK) {
-        if (sd.createFile(fileName) != FR_OK) {
-            printf("CSV error: could not create file '%s'\n", fileName.c_str());
-            return false;
-        } else {
-            sd.openFile(fileName, SD::OpenMode::kOpenAppend);
-            sd.fileWrite("sample,timestamp,value1,value2,value3,value4\n");
-            sd.closeFile();
-        }
-    } else {
-        sd.closeFile();
-    }
-
-    // Append line
-    if (sd.openFile(fileName, SD::OpenMode::kOpenAppend) == FR_OK) {
-        if (sd.fileWrite(finalLine) != FR_OK) {
-            sd.closeFile();
-            printf("CSV error: write failed\n");
-            return false;
-        }
-        sd.closeFile();
-        return true;
-    }
-
-    printf("CSV error: could not open for append\n");
-    return false;
+    
 }
